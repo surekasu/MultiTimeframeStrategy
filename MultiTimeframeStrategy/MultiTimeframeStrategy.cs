@@ -118,6 +118,8 @@ namespace cAlgo.Robots
         string currentRegime = "Unknown";
 
         private int totalBreakevens = 0;
+        private int blockedBuyExtensions = 0;
+        private int blockedSellExtensions = 0;
 
         //Session stats
         // Asian
@@ -181,6 +183,9 @@ namespace cAlgo.Robots
         [Parameter("Risk % Per Trade", DefaultValue = 2.0)]
         public double RiskPercent { get; set; }
 
+        [Parameter("Max EMA Extension", DefaultValue = 150)]
+        public double MaxEMAExtension { get; set; }
+
         protected override void OnStart()
         {
             h4Bars = MarketData.GetBars(TimeFrame.Hour4);
@@ -206,6 +211,19 @@ namespace cAlgo.Robots
                 Server.Time,
                 Server.TimeInUtc
             );
+        }
+
+        protected override void OnStop()
+        {
+            Print("On Stop Start");
+            double totalBlocked =   blockedBuyExtensions + blockedSellExtensions;
+            Print(
+                "*** EMA EXTENSION FILTER *** Buy Blocks: {0} | Sell Blocks: {1} | Total Blocks: {2}",
+                blockedBuyExtensions,
+                blockedSellExtensions,
+                totalBlocked
+            );
+           
         }
 
         private void TrackRejected(string reason, string trend)
@@ -1249,7 +1267,7 @@ namespace cAlgo.Robots
             double retraceSize = Math.Abs(lastClose - prevClose);
             double atr = atr_M15.Result[end];
 
-            bool deepEnough = retraceSize >= atr * 0.5;
+            bool deepEnough = retraceSize >= atr * 0.7;
             // 🔥 Strong pullback
             if (maxConsecutive >= 3 && retraceBars >= 3 && deepEnough)
                 return PullbackResult.Valid_Strong;
@@ -1754,17 +1772,19 @@ namespace cAlgo.Robots
             {
                 double extensionPips = Math.Abs(Symbol.Ask - ema21_M15.Result.LastValue) / Symbol.PipSize;
 
-                if (extensionPips <= 150)
+                if (extensionPips <= MaxEMAExtension)
                 {
                     ExecuteTrade(TradeType.Buy);
+                    
+                    readyToBuy = false;
+                    readyToSell = false;
                 }
                 else
                 {
+                    blockedBuyExtensions++;
                     Print("Blocked BUY: EMA extension too large | Extension: {0:F1}", extensionPips);
                 }
 
-                readyToBuy = false;
-                readyToSell = false;
             }
 
             if (readyToSell && !hasOpenBotTrade && Symbol.Ask < triggerLow)
@@ -1772,17 +1792,20 @@ namespace cAlgo.Robots
 
                 double extensionPips = Math.Abs(Symbol.Bid - ema21_M15.Result.LastValue) / Symbol.PipSize;
 
-                if (extensionPips <= 150)
+                if (extensionPips <= MaxEMAExtension)
                 {
                     ExecuteTrade(TradeType.Sell);
+
+                    readyToSell = false;
+                    readyToBuy = false;
                 }
                 else
                 {
+                    blockedSellExtensions++;
                     Print("Blocked SELL: EMA extension too large | Extension: {0:F1}", extensionPips);
                 }
                 
-                readyToSell = false;
-                readyToBuy = false;
+
             }
 
             foreach (var position in Positions)
@@ -1820,5 +1843,7 @@ namespace cAlgo.Robots
                 //ManageSmartTrailingStop(position);
             }
         }
+
+        
     }
 }
