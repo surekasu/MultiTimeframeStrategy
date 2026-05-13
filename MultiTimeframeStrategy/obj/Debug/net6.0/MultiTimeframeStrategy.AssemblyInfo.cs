@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MultiTimeframeStrategy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6ad9a7fc4cccd3029b6488b91826cb1dddd442ba")]
 [assembly: System.Reflection.AssemblyProductAttribute("MultiTimeframeStrategy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MultiTimeframeStrategy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
