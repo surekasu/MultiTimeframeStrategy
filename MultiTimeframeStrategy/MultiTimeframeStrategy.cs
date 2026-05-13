@@ -120,6 +120,17 @@ namespace cAlgo.Robots
         private int totalBreakevens = 0;
         private int blockedBuyExtensions = 0;
         private int blockedSellExtensions = 0;
+        private int blockedContinuationLegs = 0;
+
+        //Telegram Stats
+        private string currentH1Trend;
+        private string currentH4Trend;
+        private bool currentCounterTrend = false;
+        private bool currentMomentumCondition;
+        private bool currentOBCondition;
+        private bool currentFVGCondition;
+        private double currentExtensionPips;
+        private int currentContinuationLegs;
 
         //Session stats
         // Asian
@@ -186,6 +197,9 @@ namespace cAlgo.Robots
         [Parameter("Max EMA Extension", DefaultValue = 150)]
         public double MaxEMAExtension { get; set; }
 
+        [Parameter("Max Continuation Legs", DefaultValue = 2)]
+        public int MaxContinuationLegs { get; set; }
+
         protected override void OnStart()
         {
             h4Bars = MarketData.GetBars(TimeFrame.Hour4);
@@ -215,13 +229,125 @@ namespace cAlgo.Robots
 
         protected override void OnStop()
         {
-            Print("On Stop Start");
             double totalBlocked =   blockedBuyExtensions + blockedSellExtensions;
             Print(
                 "*** EMA EXTENSION FILTER *** Buy Blocks: {0} | Sell Blocks: {1} | Total Blocks: {2}",
                 blockedBuyExtensions,
                 blockedSellExtensions,
                 totalBlocked
+            );
+
+            Print(
+                "*** CONTINUATION LEG FILTER *** Blocks: {0}",
+                blockedContinuationLegs
+            );
+
+            double pbValidPercent = pbTotal > 0
+                    ? (pbStrong + pbWeak + pbMomentum) * 100.0 / pbTotal
+                    : 0;
+
+            double pbfailPercent = pbTotal > 0
+                ? (pbTooShallow + pbNoRetrace) * 100.0 / pbTotal
+                : 0;
+            
+            Print(
+                "***FILTER STATS*** Bars: {0} | Existing: {1} | Choppy: {2} | Trend: {3} | EMA: {4} | S/R: {5} | " +
+                "Confirm Fail ({6}) | OB ({7}) FVG ({8}) Momentum ({9}) | " +
+                "SL Small ({10}) SL Large ({11}) | Passed ({12}) | " +
+                "Pullback Total ({13}) | Strong ({14}) Weak ({15}) Momentum ({16}) | " +
+                "Fail: Shallow ({17}) NoRetrace ({18}) | blockedWeakPullbacks ({19}) | Valid Pullback %: {20:F1} | failed Pullback %: {21:F1}",
+
+                totalBarsChecked,
+                blockedExistingTrade,
+                blockedChoppy,
+                blockedTrend,
+                blockedEMA,
+                blockedSR,
+
+                blockedConfirmation,
+                confirmFailOB,
+                confirmFailFVG,
+                confirmFailMomentum,
+
+                blockedSLTooSmall,
+                blockedSLTooLarge,
+
+                confirmPass,
+
+                pbTotal,
+                pbStrong,
+                pbWeak,
+                pbMomentum,
+                pbTooShallow,
+                pbNoRetrace,
+                blockedWeakPullbacks,
+                pbValidPercent,
+                pbfailPercent
+            );
+        
+     
+            // TRADE STATS
+            double winRate = totalTrades > 0
+            ? (double)totalWins / totalTrades * 100
+            : 0;
+
+            Print(
+                "***TRADE STATS*** Total: {0} | Wins: {1} | Losses: {2} | BE: {3} | Win Rate: {4:F1}% | " +
+                "A W/L: {5}/{6} | " +
+                "B W/L: {7}/{8} | " +
+                "C W/L: {9}/{10}",
+
+                totalTrades,
+                totalWins,
+                totalLosses,
+                totalBreakevens,
+                winRate,
+                aWins,
+                aLosses,
+
+                bWins,
+                bLosses,
+
+                cWins,
+                cLosses
+            );
+
+            //Regime Stats
+            Print(
+                "***REGIME STATS*** " +
+                "Trend W/L: {0}/{1} | " +
+                "Chop W/L: {2}/{3} | " +
+                "Transition W/L: {4}/{5}",
+
+                trendWins,
+                trendLosses,
+
+                chopWins,
+                chopLosses,
+
+                transitionWins,
+                transitionLosses
+            );
+
+            //  REJECT STATS
+            Print("***REJECT STATS*** Pullback Reject Wins: ", pullbackRejectWins,
+                  " | Loss: ", pullbackRejectLoss,
+                  " | Confirm Reject Wins: ", confirmRejectWins,
+                  " | Loss: ", confirmRejectLoss,
+                  " | EMA Reject Wins: ", emaRejectWins,
+                 " | Loss: ", emaRejectLoss);  
+        
+            Print(
+                "***SESSION STATS*** Asian W/L/BE: {0}/{1}/{2} | London: {3}/{4}/{5} | NY: {6}/{7}/{8}",
+                asianWins,
+                asianLosses,
+                asianBE,
+                londonWins,
+                londonLosses,
+                londonBE,
+                nyWins,
+                nyLosses,
+                nyBE
             );
            
         }
@@ -307,6 +433,50 @@ namespace cAlgo.Robots
             }
         }
 
+        private int CountContinuationLegs(string trend)
+        {
+            int legs = 0;
+
+            int lookback = 20;
+
+            bool wasAboveEMA = false;
+            bool wasBelowEMA = false;
+            
+            if (m15Bars.Count < lookback + 5)                
+                return 0;
+            
+            for (int i = m15Bars.ClosePrices.Count - lookback;i < m15Bars.ClosePrices.Count;i++)
+            {
+                double close = m15Bars.ClosePrices[i];
+                double ema = ema21_M15.Result[i];
+
+               if (trend == "Bullish")
+                {
+                    bool aboveEMA = close > ema;
+
+                    if (aboveEMA && !wasAboveEMA)
+                    {
+                        legs++;
+                    }
+
+                    wasAboveEMA = aboveEMA;
+                }
+                else if (trend == "Bearish")
+                {
+                    bool belowEMA = close < ema;
+
+                    if (belowEMA && !wasBelowEMA)
+                    {
+                        legs++;
+                    }
+
+                    wasBelowEMA = belowEMA;
+                }
+            }
+
+            return legs;
+        }
+
         private void OnPositionClosed(PositionClosedEventArgs args)
         {
             var position = args.Position;
@@ -337,7 +507,7 @@ namespace cAlgo.Robots
             {
                 totalBreakevens++;
 
-                Print("Breakeven trade recorded");
+                //Print("Breakeven trade recorded");
 
             }
             else if (isWin)
@@ -457,7 +627,7 @@ namespace cAlgo.Robots
                 return;
 
             string status = "";
-            string trend = "";
+            //string trend = "";
             int confirmationScore = 0;
 
             EvaluateRejectedTrades();
@@ -466,113 +636,7 @@ namespace cAlgo.Robots
             // ===============================
             if (totalBarsChecked % 10 == 0)
             {
-                double pbValidPercent = pbTotal > 0
-                    ? (pbStrong + pbWeak + pbMomentum) * 100.0 / pbTotal
-                    : 0;
-
-                double pbfailPercent = pbTotal > 0
-                    ? (pbTooShallow + pbNoRetrace) * 100.0 / pbTotal
-                    : 0;
                 
-                Print(
-                    "***FILTER STATS*** Bars: {0} | Existing: {1} | Choppy: {2} | Trend: {3} | EMA: {4} | S/R: {5} | " +
-                    "Confirm Fail ({6}) | OB ({7}) FVG ({8}) Momentum ({9}) | " +
-                    "SL Small ({10}) SL Large ({11}) | Passed ({12}) | " +
-                    "Pullback Total ({13}) | Strong ({14}) Weak ({15}) Momentum ({16}) | " +
-                    "Fail: Shallow ({17}) NoRetrace ({18}) | blockedWeakPullbacks ({19}) | Valid Pullback %: {20:F1} | failed Pullback %: {21:F1}",
-
-                    totalBarsChecked,
-                    blockedExistingTrade,
-                    blockedChoppy,
-                    blockedTrend,
-                    blockedEMA,
-                    blockedSR,
-
-                    blockedConfirmation,
-                    confirmFailOB,
-                    confirmFailFVG,
-                    confirmFailMomentum,
-
-                    blockedSLTooSmall,
-                    blockedSLTooLarge,
-
-                    confirmPass,
-
-                    pbTotal,
-                    pbStrong,
-                    pbWeak,
-                    pbMomentum,
-                    pbTooShallow,
-                    pbNoRetrace,
-                    blockedWeakPullbacks,
-                    pbValidPercent,
-                    pbfailPercent
-                );
-            
-         
-         // TRADE STATS
-                double winRate = totalTrades > 0
-                ? (double)totalWins / totalTrades * 100
-                : 0;
-
-                Print(
-                    "***TRADE STATS*** Total: {0} | Wins: {1} | Losses: {2} | BE: {3} | Win Rate: {4:F1}% | " +
-                    "A W/L: {5}/{6} | " +
-                    "B W/L: {7}/{8} | " +
-                    "C W/L: {9}/{10}",
-
-                    totalTrades,
-                    totalWins,
-                    totalLosses,
-                    totalBreakevens,
-                    winRate,
-                    aWins,
-                    aLosses,
-
-                    bWins,
-                    bLosses,
-
-                    cWins,
-                    cLosses
-                );
-
-                //Regime Stats
-                Print(
-                    "***REGIME STATS*** " +
-                    "Trend W/L: {0}/{1} | " +
-                    "Chop W/L: {2}/{3} | " +
-                    "Transition W/L: {4}/{5}",
-
-                    trendWins,
-                    trendLosses,
-
-                    chopWins,
-                    chopLosses,
-
-                    transitionWins,
-                    transitionLosses
-                );
-
-        //  REJECT STATS
-                Print("***REJECT STATS*** Pullback Reject Wins: ", pullbackRejectWins,
-                      " | Loss: ", pullbackRejectLoss,
-                      " | Confirm Reject Wins: ", confirmRejectWins,
-                      " | Loss: ", confirmRejectLoss,
-                      " | EMA Reject Wins: ", emaRejectWins,
-                     " | Loss: ", emaRejectLoss);  
-            
-                Print(
-                    "***SESSION STATS*** Asian W/L/BE: {0}/{1}/{2} | London: {3}/{4}/{5} | NY: {6}/{7}/{8}",
-                    asianWins,
-                    asianLosses,
-                    asianBE,
-                    londonWins,
-                    londonLosses,
-                    londonBE,
-                    nyWins,
-                    nyLosses,
-                    nyBE
-                );
 
             }
 
@@ -598,7 +662,7 @@ namespace cAlgo.Robots
             if (dailyLossCount >= 3)
             {
                 status = "Blocked: Daily Loss Limit";
-                PrintSummary(status, trend, confirmationScore);
+                //PrintSummary(status, trend, confirmationScore);
                 return;
             }
 
@@ -623,7 +687,7 @@ namespace cAlgo.Robots
             {
                 blockedExistingTrade++;
                 status = "Blocked: Existing Trade";
-                PrintSummary(status, trend, confirmationScore);
+                //PrintSummary(status, trend, confirmationScore);
                 return;
             }
 
@@ -633,7 +697,7 @@ namespace cAlgo.Robots
             if (IsChoppyMarket())
             {
                 blockedChoppy++;
-                PrintSummary("Blocked: Choppy", trend, confirmationScore);
+                //PrintSummary("Blocked: Choppy", trend, confirmationScore);
                 return;
             }
 
@@ -644,14 +708,16 @@ namespace cAlgo.Robots
             string h4Trend = GetH4Trend();
             string h1Trend = GetH1Trend();
             string executionTrend = h1Trend;
-
+            
+            currentH1Trend = h1Trend;
+            currentH4Trend = h4Trend;
             // If H4 unclear, use H1 operationally
             if (h4Trend == "transitional" && h1Trend == "transitional")
             {
                 blockedTrend++;
                 status = "Blocked: Transitional Market";
 
-                PrintSummary(status, executionTrend, confirmationScore);
+                //PrintSummary(status, executionTrend, confirmationScore);
                 return;
             }
             
@@ -678,7 +744,7 @@ namespace cAlgo.Robots
                 blockedEMA++;
                 status = "EMA Weak";
                 //TrackRejected("EMA", trend);
-                PrintSummary(status, executionTrend, confirmationScore);
+                //PrintSummary(status, executionTrend, confirmationScore);
                 return;
             }
 
@@ -715,7 +781,7 @@ namespace cAlgo.Robots
                 }
 
                 TrackRejected("Pullback", executionTrend);
-                PrintSummary(status, executionTrend, confirmationScore);
+                //PrintSummary(status, executionTrend, confirmationScore);
                 return;
             }
             else
@@ -732,7 +798,7 @@ namespace cAlgo.Robots
                         blockedWeakPullbacks++;
                         //Print("Weak pullback skipped");
                         TrackRejected("WeakPullback", executionTrend);
-                        PrintSummary("Blocked: Weak Pullback", executionTrend, confirmationScore);
+                        //PrintSummary("Blocked: Weak Pullback", executionTrend, confirmationScore);
                         return;
 
                     case PullbackResult.Valid_Momentum:
@@ -740,7 +806,7 @@ namespace cAlgo.Robots
                         break;
                 }
 
-                Print($"Pullback VALID | Type: {pullbackResult} | Trend: {executionTrend}");
+                //Print($"Pullback VALID | Type: {pullbackResult} | Trend: {executionTrend}");
             }
 
 
@@ -834,7 +900,7 @@ namespace cAlgo.Robots
                 status = $"Fail: Confirm [{failReasons.Trim()}]";
 
                 TrackRejected("Confirm", executionTrend);
-                PrintSummary(status, executionTrend, confirmationScore);
+                //PrintSummary(status, executionTrend, confirmationScore);
                 return;
             }
             
@@ -871,41 +937,55 @@ namespace cAlgo.Robots
                 tradeGrade = "C";
             }
 
-            // Filter weak C trades
-           /* if (tradeGrade == "C" && confirmationScore < 3)
-            {
-                Print($"Blocked weak C trade | Score: {confirmationScore}");
-                return;
-            }*/
-
             // ===============================
             // HTF CONTEXT RISK FILTER
             // ===============================
+
+            // HARD countertrend
+            bool hardCounterTrend =
+                (executionTrend == "Bullish" && h4Trend == "bearish") ||
+
+                (executionTrend == "Bearish" && h4Trend == "bullish");
+
+            // SOFT countertrend
+            bool softCounterTrend =
+                h4Trend == "transitional";
+
+            // Final flag
             bool counterTrendTrade =
-                h4Trend != "transitional" &&
-                h1Trend != "transitional" &&
-                h4Trend != h1Trend;
+                hardCounterTrend || softCounterTrend;
+
+            currentCounterTrend = counterTrendTrade;
 
 
-            if (counterTrendTrade)
+
+
+            // ===============================
+            // SOFT FILTERS
+            // ===============================
+            if (softCounterTrend)
             {
                 requiredScore = Math.Max(requiredScore, 3);
 
-                Print("Countertrend H1 move vs H4 context -> extra confirmation required");
+                //Print("Soft countertrend / transitional H4 -> extra confirmation required");
 
                 // Block weak pullbacks
                 if (pullbackResult == PullbackResult.Valid_Weak)
                 {
-                    Print("Blocked weak countertrend pullback");
+                    //Print("Blocked weak countertrend pullback");
                     return;
                 }
+            }
+            // Block weak C-grade trades ONLY in risky context
+            if (tradeGrade == "C" && counterTrendTrade)
+            {
+                //Print(
+                //    "Blocked C-grade trade in risky H4 context | H4: {0} | Countertrend: {1}",
+                //    h4Trend,
+                //    counterTrendTrade
+                //);
 
-                // Block weak C-grade trades
-                if (tradeGrade == "C")
-                {
-                    Print("Blocked C-grade countertrend trade");
-                    return;
-                }
+                return;
             }
 
             
@@ -975,8 +1055,10 @@ namespace cAlgo.Robots
             currentConfirmScore = confirmationScore;
             currentRequiredScore = requiredScore;
             currentPullbackResult = pullbackResult.ToString();
-
-            PrintSummary(status, executionTrend, confirmationScore);
+            currentMomentumCondition = momentumCondition;
+            currentOBCondition = obCondition;
+            currentFVGCondition = fvgCondition;
+            //PrintSummary(status, executionTrend, confirmationScore);
         }
 
         // ===================================
@@ -1267,7 +1349,7 @@ namespace cAlgo.Robots
             double retraceSize = Math.Abs(lastClose - prevClose);
             double atr = atr_M15.Result[end];
 
-            bool deepEnough = retraceSize >= atr * 0.7;
+            bool deepEnough = retraceSize >= atr * 0.5;
             // 🔥 Strong pullback
             if (maxConsecutive >= 3 && retraceBars >= 3 && deepEnough)
                 return PullbackResult.Valid_Strong;
@@ -1653,14 +1735,14 @@ namespace cAlgo.Robots
             if (slPips < minSLPips)
             {
                 blockedSLTooSmall++;    
-                Print($"SL too small, skip trade | Entry: {entry} | SL: {slPips} | Min: {minSLPips}");
+                //Print($"SL too small, skip trade | Entry: {entry} | SL: {slPips} | Min: {minSLPips}");
                 return (null, null, null);
             }
 
             if (slPips > maxSLPips)
             {
                 blockedSLTooLarge++;
-                Print($"SL too large, skip trade | Entry: {entry} | SL: {slPips} | Max: {maxSLPips}");
+                //Print($"SL too large, skip trade | Entry: {entry} | SL: {slPips} | Max: {maxSLPips}");
                 return (null, null, null);
             }
 
@@ -1714,7 +1796,7 @@ namespace cAlgo.Robots
 
             if (slPips <= 0 || tpPips <= 0)
             {
-                Print("Invalid SL/TP, skipping trade");
+                //Print("Invalid SL/TP, skipping trade");
                 return;
             }
 
@@ -1731,7 +1813,7 @@ namespace cAlgo.Robots
             {
                 totalTrades++;
                 tradeGrades[result.Position.Id] = currentTradeGrade;
-
+                printMessages(type,volumeInUnits.Value,entry,slPrice.Value,tpPrice.Value,slPips,tpPips,session);
                 //Save Trade Regime     
                 tradeRegimes[result.Position.Id] = currentRegime;
                 tradeSessions[result.Position.Id] = session;
@@ -1766,46 +1848,84 @@ namespace cAlgo.Robots
             p.SymbolName == SymbolName &&
             p.Label == BotLabel);
 
-            double buffer = BreakoutBuffer * Symbol.PipSize;
+            //double buffer = BreakoutBuffer * Symbol.PipSize;
+
+            
 
             if (readyToBuy && !hasOpenBotTrade && Symbol.Bid > triggerHigh)
             {
-                double extensionPips = Math.Abs(Symbol.Ask - ema21_M15.Result.LastValue) / Symbol.PipSize;
+                double extensionPips =
+                    Math.Abs(
+                        Symbol.Ask - ema21_M15.Result.LastValue
+                    ) / Symbol.PipSize;
 
-                if (extensionPips <= MaxEMAExtension)
-                {
-                    ExecuteTrade(TradeType.Buy);
-                    
-                    readyToBuy = false;
-                    readyToSell = false;
-                }
-                else
+                currentExtensionPips = extensionPips;
+
+                if (!IsEMAExtensionValid(extensionPips))
                 {
                     blockedBuyExtensions++;
-                    Print("Blocked BUY: EMA extension too large | Extension: {0:F1}", extensionPips);
+                    ResetTradeSetup();
+                    return;
                 }
 
+                int continuationLegs =
+                    CountContinuationLegs("Bullish");
+
+                currentContinuationLegs = continuationLegs;
+
+                int dynamicMaxLegs =
+                    GetDynamicMaxContinuationLegs();
+
+                if (!IsContinuationValid(
+                        continuationLegs,
+                        dynamicMaxLegs))
+                {
+                    blockedContinuationLegs++;
+                    ResetTradeSetup();
+                    return;
+                }
+
+                ExecuteTrade(TradeType.Buy);
+
+                ResetTradeSetup();
             }
 
-            if (readyToSell && !hasOpenBotTrade && Symbol.Ask < triggerLow)
+            if (readyToSell && !hasOpenBotTrade && Symbol.Bid > triggerLow)
             {
+                double extensionPips =
+                    Math.Abs(
+                        Symbol.Bid - ema21_M15.Result.LastValue
+                    ) / Symbol.PipSize;
 
-                double extensionPips = Math.Abs(Symbol.Bid - ema21_M15.Result.LastValue) / Symbol.PipSize;
+                currentExtensionPips = extensionPips;
 
-                if (extensionPips <= MaxEMAExtension)
-                {
-                    ExecuteTrade(TradeType.Sell);
-
-                    readyToSell = false;
-                    readyToBuy = false;
-                }
-                else
+                if (!IsEMAExtensionValid(extensionPips))
                 {
                     blockedSellExtensions++;
-                    Print("Blocked SELL: EMA extension too large | Extension: {0:F1}", extensionPips);
+                    ResetTradeSetup();
+                    return;
                 }
-                
 
+                int continuationLegs =
+                    CountContinuationLegs("Bullish");
+
+                currentContinuationLegs = continuationLegs;
+
+                int dynamicMaxLegs =
+                    GetDynamicMaxContinuationLegs();
+
+                if (!IsContinuationValid(
+                        continuationLegs,
+                        dynamicMaxLegs))
+                {
+                    blockedContinuationLegs++;
+                    ResetTradeSetup();
+                    return;
+                }
+
+                ExecuteTrade(TradeType.Sell);
+
+                ResetTradeSetup();
             }
 
             foreach (var position in Positions)
@@ -1831,12 +1951,12 @@ namespace cAlgo.Robots
                     ClosePosition(position, halfVolume);
                     partialClosed.Add(position.Id);
 
-                    Print(
-                        "PARTIAL TP | Type: {0} | Current Profit: {1:F2} | Pips: {2:F1}",
-                        position.TradeType,
-                        position.NetProfit,
-                        position.Pips
-                    );
+                    //Print(
+                    //    "PARTIAL TP | Type: {0} | Current Profit: {1:F2} | Pips: {2:F1}",
+                    //    position.TradeType,
+                    //    position.NetProfit,
+                    //    position.Pips
+                    //);
                 }
                 
                 // Trailing
@@ -1844,6 +1964,97 @@ namespace cAlgo.Robots
             }
         }
 
+        private bool IsContinuationValid(
+        int continuationLegs,
+        int maxLegs)
+        {
+            return continuationLegs <= maxLegs;
+        }
+        private bool IsEMAExtensionValid(double extensionPips)
+        {
+            return extensionPips <= MaxEMAExtension;
+        }
+        private void ResetTradeSetup()
+        {
+            readyToBuy = false;
+            readyToSell = false;
+        }
+        private int GetDynamicMaxContinuationLegs()
+        {
+            if (currentH4Trend == "bullish")
+                return MaxContinuationLegs + 1;
+
+            if (currentH4Trend == "bearish")
+                return MaxContinuationLegs;
+
+            return MaxContinuationLegs;
+        }
+        private void printMessages(TradeType type,
+            double volume,double entry,
+            double slPrice,double tpPrice,
+            double slPips, double tpPips,
+            string session)
+        {
+            string tradeLog =
+            $"==============================\n" +
+            $"🚀 TRADE TRIGGERED | {type}\n" +
+            $"==============================\n\n" +
+
+            // Basic Info
+            $"📅 DateTime: {Server.TimeInUtc:yyyy-MM-dd HH:mm:ss}\n" +
+            $"📈 Symbol: {SymbolName}\n" +
+            $"⏰ TF: {TimeFrame}\n" +
+            $"📦 Volume: {volume}\n\n" +
+
+            // Price Info
+            $"💰 Entry: {entry:F2}\n" +
+            $"🛑 SL: {slPrice:F2}\n" +
+            $"🎯 TP: {tpPrice:F2}\n" +
+            $"📏 SL Pips: {slPips:F1}\n" +
+            $"🎯 TP Pips: {tpPips:F1}\n\n" +
+
+            // Trend Context
+            $"📊 TREND\n" +
+            $"H1: {currentH1Trend}\n" +
+            $"H4: {currentH4Trend}\n" +
+            $"⚠️ Countertrend: {(currentCounterTrend ? "YES" : "NO")}\n\n" +
+
+            // Setup Quality
+            $"🏗️ SETUP\n" +
+            $"Pullback: {currentPullbackResult}\n" +
+            $"Grade: {currentTradeGrade}\n" +
+            $"Score: {currentConfirmScore}/{currentRequiredScore}\n\n" +
+
+            // Confirmations
+            $"✅ CONFIRMATIONS\n" +
+            $"Momentum: {(currentMomentumCondition ? "YES ✔" : "NO ✖")}\n" +
+            $"OB: {(currentOBCondition ? "YES ✔" : "NO ✖")}\n" +
+            $"FVG: {(currentFVGCondition ? "YES ✔" : "NO ✖")}\n\n" +
+
+            // Quality Filters
+            $"🧠 QUALITY FILTERS\n" +
+            $"EMA Extension: {currentExtensionPips:F1}\n" +
+            $"Continuation Legs: {currentContinuationLegs}\n" +
+            $"EMA21 Alignment: {(IsEMAAligned(currentH1Trend) ? "YES ✔" : "NO ✖")}\n\n" +
+
+            // Market Context
+            $"🌍 CONTEXT\n" +
+            $"Session: {session}\n" +
+            $"Regime: {currentRegime}\n\n" +
+
+            // Reasons Summary
+            $"📝 REASONS\n" +
+            $"{(currentMomentumCondition ? "✔ Momentum confirmed\n" : "")}" +
+            $"{(currentOBCondition ? "✔ Order Block confirmed\n" : "")}" +
+            $"{(currentFVGCondition ? "✔ Fair Value Gap confirmed\n" : "")}" +
+            $"✔ Pullback valid ({currentPullbackResult})\n" +
+            $"✔ EMA extension within limit\n" +
+            $"✔ Continuation legs acceptable\n" +
+            $"✔ Breakout trigger confirmed\n";
+
+            Print(tradeLog);        
+
+        }
         
     }
 }
