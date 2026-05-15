@@ -4,10 +4,11 @@ using cAlgo.API.Internals;
 using System;
 using System.Linq;
 using System.Collections.Generic;
-
+using System.IO;
+using System.Text.Json;
 namespace cAlgo.Robots
 {
-    [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
+    [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.FullAccess)]
     public class MTF_Pro_Bot_V4 : Robot    {
         private const string BotLabel = "MTF V4";
 
@@ -131,7 +132,8 @@ namespace cAlgo.Robots
         private bool currentFVGCondition;
         private double currentExtensionPips;
         private int currentContinuationLegs;
-
+        private double currentATR = 0.5;
+        private double currentrr = 1.8;
         //Session stats
         // Asian
         private int asianWins = 0;
@@ -151,6 +153,11 @@ namespace cAlgo.Robots
         private const string SessionAsian = "Asian";
         private const string SessionLondon = "London";
         private const string SessionNY = "NewYork";
+
+        private static readonly string LogFolder =
+            @"C:\Users\mario\OneDrive\Ctrader\JsonLogs\";
+        private string signalLogFile;
+        
 
         private Dictionary<long, string> tradeSessions =
         new Dictionary<long, string>();
@@ -225,6 +232,8 @@ namespace cAlgo.Robots
                 Server.Time,
                 Server.TimeInUtc
             );
+
+            signalLogFile = $"signals_{SymbolName}_{TimeFrame}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.jsonl";
         }
 
         protected override void OnStop()
@@ -352,6 +361,60 @@ namespace cAlgo.Robots
            
         }
 
+        public static class JsonLogger
+        {
+
+            public static void Write(string signalLogFile, object data)
+            {
+                try
+                {
+                    // DEBUG
+                    string fullPath =
+                        Path.Combine(LogFolder, signalLogFile);
+
+                    // DEBUG
+                    File.AppendAllText(
+                        @"C:\temp\debug.txt",
+                        "Reached logger" + Environment.NewLine
+                    );
+
+                    if (!Directory.Exists(LogFolder))
+                    {
+                        Directory.CreateDirectory(LogFolder);
+
+                        File.AppendAllText(
+                            @"C:\temp\debug.txt",
+                            "Folder created" + Environment.NewLine
+                        );
+                    }
+
+                    string json =
+                        JsonSerializer.Serialize(data);
+
+                    File.AppendAllText(
+                        @"C:\temp\debug.txt",
+                        json + Environment.NewLine
+                    );
+
+                    File.AppendAllText(
+                        fullPath,
+                        json + Environment.NewLine
+                    );
+
+                    File.AppendAllText(
+                        @"C:\temp\debug.txt",
+                        "JSON written successfully" + Environment.NewLine
+                    );
+                }
+                catch (Exception ex)
+                {
+                    File.AppendAllText(
+                        @"C:\temp\debug.txt",
+                        "ERROR: " + ex.ToString() + Environment.NewLine
+                    );
+                }
+            }
+        }
         private void TrackRejected(string reason, string trend)
         {
             double entry = trend == "bullish" ? Symbol.Ask : Symbol.Bid;
@@ -937,8 +1000,18 @@ namespace cAlgo.Robots
                 tradeGrade = "C";
             }
 
+            int continuationLegs =
+                executionTrend == "Bullish"
+                ? CountContinuationLegs("Bullish")
+                : CountContinuationLegs("Bearish");
+
+            double extensionPips =
+                executionTrend == "Bullish"
+                ? Math.Abs(Symbol.Ask - ema21_M15.Result.LastValue) / Symbol.PipSize
+                : Math.Abs(Symbol.Bid - ema21_M15.Result.LastValue) / Symbol.PipSize;
+
             // ===============================
-            // HTF CONTEXT RISK FILTER
+            // HTF CONTEXT
             // ===============================
 
             // HARD countertrend
@@ -947,37 +1020,29 @@ namespace cAlgo.Robots
 
                 (executionTrend == "Bearish" && h4Trend == "bullish");
 
-            // SOFT countertrend
-            bool softCounterTrend =
-                h4Trend == "transitional";
+            // Transitional H4
+            bool transitionalH4 =h4Trend.Equals("transitional",StringComparison.OrdinalIgnoreCase);
 
-            // Final flag
-            bool counterTrendTrade =
-                hardCounterTrend || softCounterTrend;
+            // Final context flag
+            bool riskyContext =
+                hardCounterTrend || transitionalH4;
 
-            currentCounterTrend = counterTrendTrade;
-
-
+            currentCounterTrend = riskyContext;
 
 
             // ===============================
             // SOFT FILTERS
             // ===============================
-            if (softCounterTrend)
+            if (transitionalH4)
             {
                 requiredScore = Math.Max(requiredScore, 3);
 
-                //Print("Soft countertrend / transitional H4 -> extra confirmation required");
-
-                // Block weak pullbacks
                 if (pullbackResult == PullbackResult.Valid_Weak)
-                {
-                    //Print("Blocked weak countertrend pullback");
                     return;
-                }
             }
+
             // Block weak C-grade trades ONLY in risky context
-            if (tradeGrade == "C" && counterTrendTrade)
+            if (tradeGrade == "C" && riskyContext)
             {
                 //Print(
                 //    "Blocked C-grade trade in risky H4 context | H4: {0} | Countertrend: {1}",
@@ -987,7 +1052,16 @@ namespace cAlgo.Robots
 
                 return;
             }
+            if (hardCounterTrend)
+            {
+                requiredScore = Math.Max(requiredScore, 4);
 
+                if (continuationLegs >= 2)
+                    return;
+
+                if (extensionPips > 90)
+                    return;
+            }
             
             // BUY & SELL ARM Logic
             int i = m15Bars.Count - 2;
@@ -1348,8 +1422,16 @@ namespace cAlgo.Robots
 
             double retraceSize = Math.Abs(lastClose - prevClose);
             double atr = atr_M15.Result[end];
+            currentATR = atr;
+            bool deepEnough;
+            if (trend == "bullish")
+                deepEnough = retraceSize >= atr * 0.5;
 
-            bool deepEnough = retraceSize >= atr * 0.5;
+            else if (trend == "bearish")
+                deepEnough = retraceSize >= atr * 0.35;
+
+            else
+                deepEnough = retraceSize >= atr * 0.5;
             // 🔥 Strong pullback
             if (maxConsecutive >= 3 && retraceBars >= 3 && deepEnough)
                 return PullbackResult.Valid_Strong;
@@ -1662,7 +1744,7 @@ namespace cAlgo.Robots
             double maxSLPips = SymbolName == "XAUUSD" ? 600 : MaxSLPips;     
 
             double rr = 1.8;   // Reward ratio
-
+            currentrr = rr;
             // -----------------------------------
             // SWING LEVELS
             // -----------------------------------
@@ -1813,13 +1895,18 @@ namespace cAlgo.Robots
             {
                 totalTrades++;
                 tradeGrades[result.Position.Id] = currentTradeGrade;
-                printMessages(type,volumeInUnits.Value,entry,slPrice.Value,tpPrice.Value,slPips,tpPips,session);
+                //printMessages(type,volumeInUnits.Value,entry,slPrice.Value,tpPrice.Value,slPips,tpPips,session);
                 //Save Trade Regime     
                 tradeRegimes[result.Position.Id] = currentRegime;
                 tradeSessions[result.Position.Id] = session;
+                long tradeId = result.Position.Id;
+                logSignal(type,session,tradeId,currentRegime,currentH1Trend,currentH4Trend,false,currentPullbackResult,
+                    currentTradeGrade,currentConfirmScore,currentRequiredScore,currentMomentumCondition,
+                    currentOBCondition,currentFVGCondition,currentExtensionPips,currentContinuationLegs,
+                    IsEMAAligned(currentH1Trend),entry,slPrice.Value,tpPrice.Value,slPips,tpPips,currentrr,
+                    volumeInUnits.Value,currentATR,true,true,"Auto","Executed");
             }
 
-            
 
             Print(
                 "TRADE EXECUTED | Grade: {0} | Trend: {1} | Pullback: {2} | Type: {3} | Entry: {4} | SL: {5} ({6} pips) | TP: {7} ({8} pips) | Score: {9}/{10}",
@@ -2055,6 +2142,96 @@ namespace cAlgo.Robots
             Print(tradeLog);        
 
         }
-        
+
+        private void logSignal(TradeType direction,string session, long tradeId, string regime, string h1Trend, string h4Trend,bool countertrend, 
+            string pullbackType, string grade, int confirmScore, int requiredScore,bool momentumConfirmed, bool obConfirmed, 
+            bool fvgConfirmed,double emaExtension, int continuationLegs, bool ema21Aligned,double entry, double sl, 
+            double tp, double slPips, double tpPips, double rr, double volume, double atr, bool telegramSent, 
+            bool tradeExecuted, string executionMode, string signalStatus)
+        {
+            var signal = new SignalLog
+            {
+                Event = "SIGNAL_GENERATED",
+
+                SignalId = Guid.NewGuid().ToString(),
+
+                TradeId = tradeId,
+
+                BotName = "MultiTimeframeStrategy",
+
+                StrategyVersion = "MTF_V4",
+
+                TimestampUtc = Server.TimeInUtc,
+
+                LocalTimestamp = Server.Time,
+
+                Symbol = SymbolName,
+
+                Timeframe = TimeFrame.ToString(),
+
+                Direction = direction.ToString(),
+
+                Session =session,
+
+                Regime = regime,
+
+                H1Trend = h1Trend,
+
+                H4Trend = h4Trend,
+
+                Countertrend = false,
+
+                PullbackType = pullbackType,
+
+                Grade = grade,
+
+                ConfirmationScore = confirmScore,
+
+                RequiredScore = requiredScore,
+
+                MomentumConfirmed = momentumConfirmed,
+
+                ObConfirmed = obConfirmed,
+
+                FvgConfirmed = fvgConfirmed,
+
+                EmaExtension = emaExtension,
+
+                ContinuationLegs = continuationLegs,
+
+                Ema21Alignment = ema21Aligned,
+
+                EntryPrice = entry,
+
+                StopLoss = sl,
+
+                TakeProfit = tp,
+
+                SlPips = slPips,
+
+                TpPips = tpPips,
+
+                PlannedRR = rr,
+
+                Volume = volume,
+
+                Spread = Symbol.Spread,
+
+                Atr = atr,
+
+                TelegramSent = telegramSent,
+
+                TradeExecuted = tradeExecuted,
+
+                ExecutionMode = executionMode,
+
+                SignalStatus = signalStatus,
+
+            };
+            Print("Inside LogSignal");
+            JsonLogger.Write(signalLogFile, signal);
+            
+        }
     }
 }
+
