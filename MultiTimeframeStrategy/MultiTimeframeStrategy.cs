@@ -154,10 +154,14 @@ namespace cAlgo.Robots
         private const string SessionLondon = "London";
         private const string SessionNY = "NewYork";
 
-        private static readonly string LogFolder =
-            @"C:\Users\mario\OneDrive\Ctrader\JsonLogs\";
+        private string runFolder;
         private string signalLogFile;
-        
+        private string tradeCloseLogFile;
+        private string strategyConfigLogFile;
+        string runId;
+        private double netProfit;
+        private double grossLoss = 0;
+        private double grossProfit = 0;
 
         private Dictionary<long, string> tradeSessions =
         new Dictionary<long, string>();
@@ -166,6 +170,9 @@ namespace cAlgo.Robots
         new Dictionary<long, string>();
 
         private Dictionary<long, string> tradeRegimes =
+        new Dictionary<long, string>();
+
+        private Dictionary<long, string> tradeSignalMap =
         new Dictionary<long, string>();
 
         [Parameter("Entry Mode", DefaultValue = 2)]
@@ -233,7 +240,23 @@ namespace cAlgo.Robots
                 Server.TimeInUtc
             );
 
-            signalLogFile = $"signals_{SymbolName}_{TimeFrame}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.jsonl";
+            runId =
+                $"Run_{DateTime.UtcNow:yyyyMMdd_HHmm}";
+
+            runFolder =
+                Path.Combine(
+                     @"C:\Users\mario\OneDrive\Ctrader\JsonLogs\",
+                    runId
+                );
+
+            if (!Directory.Exists(runFolder))
+                Directory.CreateDirectory(runFolder);
+
+            signalLogFile = "signals.jsonl";
+            tradeCloseLogFile = "trade_closes.jsonl";
+            strategyConfigLogFile = "config.jsonl";
+
+            LogStrategyConfig();
         }
 
         protected override void OnStop()
@@ -358,59 +381,38 @@ namespace cAlgo.Robots
                 nyLosses,
                 nyBE
             );
-           
+            LogBacktestSummary();
         }
 
         public static class JsonLogger
         {
 
-            public static void Write(string signalLogFile, object data)
+            public static void Write(
+                string folder,
+                string fileName,
+                object data)
             {
                 try
                 {
-                    // DEBUG
+                    if (!Directory.Exists(folder))
+                        Directory.CreateDirectory(folder);
+
                     string fullPath =
-                        Path.Combine(LogFolder, signalLogFile);
-
-                    // DEBUG
-                    File.AppendAllText(
-                        @"C:\temp\debug.txt",
-                        "Reached logger" + Environment.NewLine
-                    );
-
-                    if (!Directory.Exists(LogFolder))
-                    {
-                        Directory.CreateDirectory(LogFolder);
-
-                        File.AppendAllText(
-                            @"C:\temp\debug.txt",
-                            "Folder created" + Environment.NewLine
-                        );
-                    }
+                        Path.Combine(folder, fileName);
 
                     string json =
                         JsonSerializer.Serialize(data);
 
-                    File.AppendAllText(
-                        @"C:\temp\debug.txt",
-                        json + Environment.NewLine
-                    );
-
-                    File.AppendAllText(
+                    System.IO.File.AppendAllText(
                         fullPath,
                         json + Environment.NewLine
-                    );
-
-                    File.AppendAllText(
-                        @"C:\temp\debug.txt",
-                        "JSON written successfully" + Environment.NewLine
                     );
                 }
                 catch (Exception ex)
                 {
-                    File.AppendAllText(
-                        @"C:\temp\debug.txt",
-                        "ERROR: " + ex.ToString() + Environment.NewLine
+                    System.IO.File.AppendAllText(
+                        folder,
+                        ex.ToString()
                     );
                 }
             }
@@ -676,6 +678,38 @@ namespace cAlgo.Robots
             tradeGrades.Remove(position.Id);
             tradeRegimes.Remove(position.Id);
             tradeSessions.Remove(position.Id);
+
+             double actualRR =
+                Math.Abs(position.Pips / 84.7);
+
+            string exitReason =
+                position.NetProfit > 0
+                    ? "TakeProfit"
+                    : "StopLoss";
+            
+            netProfit += position.NetProfit;
+            if (position.NetProfit < 0)
+            {
+                grossLoss += position.NetProfit;
+            }
+            else
+            {
+                grossProfit += position.NetProfit;
+            }
+
+            string signalId = "";
+            if (tradeSignalMap.ContainsKey(position.Id))
+            {
+                signalId = tradeSignalMap[position.Id];
+                tradeSignalMap.Remove(position.Id);
+            }   
+            LogTradeClose(
+                position,
+                signalId,
+                actualRR,
+                exitReason
+            );
+
 
         }
 
@@ -1900,7 +1934,9 @@ namespace cAlgo.Robots
                 tradeRegimes[result.Position.Id] = currentRegime;
                 tradeSessions[result.Position.Id] = session;
                 long tradeId = result.Position.Id;
-                logSignal(type,session,tradeId,currentRegime,currentH1Trend,currentH4Trend,false,currentPullbackResult,
+                string signalId = Guid.NewGuid().ToString();
+                tradeSignalMap[tradeId] =signalId;
+                logSignal(signalId, type,session,tradeId,currentRegime,currentH1Trend,currentH4Trend,false,currentPullbackResult,
                     currentTradeGrade,currentConfirmScore,currentRequiredScore,currentMomentumCondition,
                     currentOBCondition,currentFVGCondition,currentExtensionPips,currentContinuationLegs,
                     IsEMAAligned(currentH1Trend),entry,slPrice.Value,tpPrice.Value,slPips,tpPips,currentrr,
@@ -2076,6 +2112,22 @@ namespace cAlgo.Robots
 
             return MaxContinuationLegs;
         }
+
+        private double CalculateClosePrice(Position position)
+        {
+            double pipValue = Symbol.PipSize;
+
+            if (position.TradeType == TradeType.Buy)
+            {
+                return position.EntryPrice +
+                       (position.Pips * pipValue);
+            }
+            else
+            {
+                return position.EntryPrice -
+                       (position.Pips * pipValue);
+            }
+        }
         private void printMessages(TradeType type,
             double volume,double entry,
             double slPrice,double tpPrice,
@@ -2143,7 +2195,7 @@ namespace cAlgo.Robots
 
         }
 
-        private void logSignal(TradeType direction,string session, long tradeId, string regime, string h1Trend, string h4Trend,bool countertrend, 
+        private void logSignal(string signalId,TradeType direction,string session, long tradeId, string regime, string h1Trend, string h4Trend,bool countertrend, 
             string pullbackType, string grade, int confirmScore, int requiredScore,bool momentumConfirmed, bool obConfirmed, 
             bool fvgConfirmed,double emaExtension, int continuationLegs, bool ema21Aligned,double entry, double sl, 
             double tp, double slPips, double tpPips, double rr, double volume, double atr, bool telegramSent, 
@@ -2153,7 +2205,7 @@ namespace cAlgo.Robots
             {
                 Event = "SIGNAL_GENERATED",
 
-                SignalId = Guid.NewGuid().ToString(),
+                SignalId = signalId,
 
                 TradeId = tradeId,
 
@@ -2228,10 +2280,321 @@ namespace cAlgo.Robots
                 SignalStatus = signalStatus,
 
             };
-            Print("Inside LogSignal");
-            JsonLogger.Write(signalLogFile, signal);
+
+            JsonLogger.Write(runFolder,signalLogFile,signal);
             
         }
-    }
+
+        private void LogTradeClose(
+            Position position,
+            string signalId,
+            double actualRR,
+            string exitReason
+        )
+        {
+            try
+            {
+                var tradeClose = new TradeCloseLog
+                {
+                    Event = "TRADE_CLOSED",
+
+                    TradeId = position.Id.ToString(),
+
+                    SignalId = signalId,
+
+                    BotName = "MultiTimeframeStrategy",
+
+                    StrategyVersion = "MTF_V4",
+
+                    TimestampUtc = TimeInUtc,
+
+                    LocalTimestamp = Server.Time,
+
+                    Symbol = position.SymbolName,
+
+                    Direction = position.TradeType.ToString(),
+
+                    EntryPrice = position.EntryPrice,
+
+                    ClosePrice = CalculateClosePrice(position),
+
+                    GrossProfit = position.GrossProfit,
+
+                    NetProfit = position.NetProfit,
+
+                    Pips = position.Pips,
+
+                    ActualRR = actualRR,
+
+                    ExitReason = exitReason,
+
+                    IsWin = position.NetProfit > 0,
+
+                    Volume = position.VolumeInUnits,
+
+                    Commission = position.Commissions,
+
+                    Swap = position.Swap,
+
+                    DurationMinutes =
+                        (int)(Server.Time - position.EntryTime).TotalMinutes,
+
+                    CreatedAt = DateTime.UtcNow
+                };
+
+
+                JsonLogger.Write(runFolder,tradeCloseLogFile,tradeClose);
+
+                Print(
+                    $"TRADE CLOSE LOGGED: {position.Id}"
+                );
+            }
+            catch (Exception ex)
+            {
+                Print(
+                    $"ERROR LOGGING TRADE CLOSE: {ex.Message}"
+                );
+            }
+        }
+
+        private void LogStrategyConfig()
+        {
+            try
+            {
+                var config = new StrategyConfigLog
+                {
+                    Event = "STRATEGY_CONFIG",
+
+                    StrategyVersion = "MTF_V4",
+
+                    CreatedAt = DateTime.UtcNow,
+
+                    EntryMode = EntryMode,
+
+                    MinConfirmations = MinConfirmations,
+
+                    MinDistance = MinSRDistance,
+
+                    RiskPercent = RiskPercent,
+
+                    MinSL = MinSLPips,
+
+                    MaxSL = MaxSLPips,
+
+                    PartialTP = PartialTP,
+
+                    UseTrailingStop = false,
+
+                    BreakoutBuffer = BreakoutBuffer,
+
+                    MaxEMAExtension = MaxEMAExtension,
+
+                    MaxContinuationLegs =
+                        MaxContinuationLegs
+                };
+
+                JsonLogger.Write(runFolder,strategyConfigLogFile,config);
+
+                Print(
+                    "Strategy Config Logged"
+                );
+            }
+            catch (Exception ex)
+            {
+                Print(
+                    $"CONFIG LOG ERROR: {ex.Message}"
+                );
+            }
+        }
+
+        private void LogBacktestSummary()
+        {
+            try
+            {
+                double pbValidPercent = pbTotal > 0
+                    ? (pbStrong + pbWeak + pbMomentum) * 100.0 / pbTotal
+                    : 0;
+
+                double pbfailPercent = pbTotal > 0
+                ? (pbTooShallow + pbNoRetrace) * 100.0 / pbTotal
+                : 0;
+
+
+                var summary = new BacktestSummaryLog
+                {
+                    Event = "BACKTEST_SUMMARY",
+
+                    BacktestRunId = runId,
+
+                    BotName = "MultiTimeframeStrategy",
+
+                    StrategyVersion = "MTF_V4",
+
+                    TimestampUtc = TimeInUtc,
+
+                    LocalTimestamp = Server.Time,
+
+                    // =====================================
+                    // OVERALL TRADE STATS
+                    // =====================================
+
+                    TotalTrades = totalTrades,
+
+                    Wins = totalWins,
+
+                    Losses = totalLosses,
+
+                    WinRate =
+                        totalTrades > 0
+                            ? Math.Round(
+                                (double)totalWins /
+                                totalTrades * 100, 2)
+                            : 0,
+
+                    GrossProfit = grossProfit,
+
+                    NetProfit = netProfit,
+
+                    ProfitFactor = grossProfit / Math.Abs(grossLoss),
+
+                    // =====================================
+                    // GRADE STATS
+                    // =====================================
+
+                    GradeAWins = aWins,
+                    GradeALosses = aLosses,
+
+                    GradeBWins = bWins,
+                    GradeBLosses = bLosses,
+
+                    GradeCWins = cWins,
+                    GradeCLosses = cLosses,
+
+                    // =====================================
+                    // REGIME STATS
+                    // =====================================
+
+                    TrendWins = trendWins,
+                    TrendLosses = trendLosses,
+
+                    ChopWins = chopWins,
+                    ChopLosses = chopLosses,
+
+                    TransitionWins = transitionWins,
+                    TransitionLosses = transitionLosses,
+
+                    // =====================================
+                    // FILTER STATS
+                    // =====================================
+
+                    TotalBars = totalBarsChecked,
+
+                    ExistingTradesBlocked =
+                        blockedExistingTrade,
+
+                    ChoppyBlocked =
+                        blockedChoppy,
+
+                    TrendBlocked =
+                        blockedTrend,
+
+                    EMABlocked =
+                        blockedEMA,
+
+                    ConfirmRejects =
+                        blockedConfirmation,
+
+                    OBRejects =
+                        confirmFailOB,
+
+                    FVGRejects =
+                        confirmFailFVG,
+
+                    MomentumRejects =
+                        confirmFailMomentum,
+
+                    SLTooSmallRejects =
+                        blockedSLTooSmall,
+
+                    SLTooLargeRejects =
+                        blockedSLTooLarge,
+
+                    PassedFilters =
+                        confirmPass,
+
+                    // =====================================
+                    // PULLBACK STATS
+                    // =====================================
+
+                    PullbackTotal =
+                        pbTotal,
+
+                    StrongPullbacks =
+                        pbStrong,
+
+                    WeakPullbacks =
+                        pbWeak,
+
+                    MomentumPullbacks =
+                        pbMomentum,
+
+                    ShallowPullbackFails =
+                        pbTooShallow,
+
+                    NoRetraceFails =
+                        pbNoRetrace,
+
+                    BlockedWeakPullbacks =
+                        blockedWeakPullbacks,
+
+                    ValidPullbackPercent =
+                        pbValidPercent,
+
+                    FailedPullbackPercent =
+                        pbfailPercent,
+
+                    // =====================================
+                    // REJECT STATS
+                    // =====================================
+
+                    PullbackRejectWins =
+                        pullbackRejectWins,
+
+                    PullbackRejectLosses =
+                        pullbackRejectLoss,
+
+                    ConfirmRejectWins =
+                        confirmRejectWins,
+
+                    ConfirmRejectLosses =
+                        confirmRejectLoss,
+
+                    EMARejectWins =
+                        emaRejectWins,
+
+                    EMARejectLosses =
+                        emaRejectLoss,
+
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                JsonLogger.Write(
+                    runFolder,
+                    "backtest_summary.jsonl",
+                    summary
+                );
+
+                Print(
+                    "Backtest Summary Logged"
+                );
+            }
+            catch (Exception ex)
+            {
+                Print(
+                    $"SUMMARY LOG ERROR: {ex.Message}"
+                );
+            }
+        }
+    }   
 }
 
