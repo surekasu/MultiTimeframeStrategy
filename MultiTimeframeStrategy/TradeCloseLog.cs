@@ -14,7 +14,9 @@ public class TradeCloseLog
 
     public string StrategyVersion { get; set; }
 
-    public DateTime TimestampUtc { get; set; }
+    public DateTime OpenTimeUtc { get; set; }
+    
+    public DateTime CloseTimeUtc { get; set; }
 
     public DateTime LocalTimestamp { get; set; }
 

@@ -14,12 +14,62 @@ namespace cAlgo.Robots
 
         private class RejectedTrade
         {
-            public string Reason;
+            // =====================================================
+            // IDENTIFIERS
+            // =====================================================
+
+            public string SignalId;
+            public string RejectReason;
+
+            // =====================================================
+            // MARKET CONTEXT
+            // =====================================================
+
+            public string Symbol;
+            public string Timeframe;
+
+            public DateTime TimestampUtc;
+
+            // =====================================================
+            // TRADE CONTEXT
+            // =====================================================
+
             public string Trend;
+
             public double Entry;
             public double TP;
             public double SL;
+
+            // =====================================================
+            // STRATEGY CONTEXT
+            // =====================================================
+
+            public string Session;
+            public string Regime;
+
+            public string H1Trend;
+            public string H4Trend;
+
+            public string Grade;
+
+            public int ConfirmationScore;
+
+            public double EMAExtension;
+
+            // =====================================================
+            // TRACKING
+            // =====================================================
+
             public int BarsLeft;
+
+            // =====================================================
+            // FUTURE OUTCOME ANALYSIS
+            // =====================================================
+
+            public bool? WouldHaveWon;
+
+            public double MaxFavorableMove;
+            public double MaxAdverseMove;
         }
         private List<RejectedTrade> rejectedTrades = new List<RejectedTrade>();
 
@@ -132,6 +182,7 @@ namespace cAlgo.Robots
         private bool currentFVGCondition;
         private double currentExtensionPips;
         private int currentContinuationLegs;
+        private string currentSession;
         private double currentATR = 0.5;
         private double currentrr = 1.8;
         //Session stats
@@ -158,6 +209,7 @@ namespace cAlgo.Robots
         private string signalLogFile;
         private string tradeCloseLogFile;
         private string strategyConfigLogFile;
+        private string rejectedSignalsLogFile;
         string runId;
         private double netProfit;
         private double grossLoss = 0;
@@ -255,7 +307,7 @@ namespace cAlgo.Robots
             signalLogFile = "signals.jsonl";
             tradeCloseLogFile = "trade_closes.jsonl";
             strategyConfigLogFile = "config.jsonl";
-
+            rejectedSignalsLogFile = "rejected_signals.jsonl";
             LogStrategyConfig();
         }
 
@@ -417,9 +469,15 @@ namespace cAlgo.Robots
                 }
             }
         }
-        private void TrackRejected(string reason, string trend)
+        private void TrackRejected(
+            string reason,
+            string trend,
+            int confirmationScore = 0,
+            string grade = "C")
         {
-            double entry = trend == "bullish" ? Symbol.Ask : Symbol.Bid;
+            double entry = trend == "bullish"
+                ? Symbol.Ask
+                : Symbol.Bid;
 
             double tp = trend == "bullish"
                 ? entry + (80 * Symbol.PipSize)
@@ -429,15 +487,46 @@ namespace cAlgo.Robots
                 ? entry - (50 * Symbol.PipSize)
                 : entry + (50 * Symbol.PipSize);
 
-            rejectedTrades.Add(new RejectedTrade
+            var rejectedTrade = new RejectedTrade
             {
-                Reason = reason,
+                SignalId = Guid.NewGuid().ToString(),
+
+                RejectReason = reason,
+
+                Symbol = SymbolName,
+                Timeframe = TimeFrame.ToString(),
+
+                TimestampUtc = Server.TimeInUtc,
+
                 Trend = trend,
+
                 Entry = entry,
                 TP = tp,
                 SL = sl,
-                BarsLeft = 20
-            });
+
+                Session = currentSession,
+
+                Regime = currentRegime,
+
+                H1Trend = currentH1Trend,
+                H4Trend = currentH4Trend,
+
+                Grade = grade,
+
+                ConfirmationScore = confirmationScore,
+
+                EMAExtension = currentExtensionPips,
+
+                BarsLeft = 20,
+
+                WouldHaveWon = null,
+
+                MaxFavorableMove = 0,
+                MaxAdverseMove = 0
+            };
+            
+            rejectedTrades.Add(rejectedTrade);
+            JsonLogger.Write(runFolder,rejectedSignalsLogFile,rejectedTrade);
         }
 
         private void UpdateRejectStats(string reason, bool win)
@@ -488,7 +577,7 @@ namespace cAlgo.Robots
 
                 if (win || lose || t.BarsLeft <= 0)
                 {
-                    UpdateRejectStats(t.Reason, win);
+                    UpdateRejectStats(t.RejectReason, win);
                     rejectedTrades.Remove(t);
                 }
                 else
@@ -638,7 +727,7 @@ namespace cAlgo.Robots
             {
 
                 string session = tradeSessions[position.Id];
-
+                currentSession = session;
                 switch (session)
                 {
                     case SessionAsian:
@@ -2306,7 +2395,9 @@ namespace cAlgo.Robots
 
                     StrategyVersion = "MTF_V4",
 
-                    TimestampUtc = TimeInUtc,
+                    OpenTimeUtc = position.EntryTime,
+                    
+                    CloseTimeUtc = TimeInUtc,
 
                     LocalTimestamp = Server.Time,
 
@@ -2580,12 +2671,12 @@ namespace cAlgo.Robots
 
                 JsonLogger.Write(
                     runFolder,
-                    "backtest_summary.jsonl",
+                    "run_summary.jsonl",
                     summary
                 );
 
                 Print(
-                    "Backtest Summary Logged"
+                    "Backtest run summary logged"
                 );
             }
             catch (Exception ex)
@@ -2595,6 +2686,8 @@ namespace cAlgo.Robots
                 );
             }
         }
+
+        
     }   
 }
 
